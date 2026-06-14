@@ -23,6 +23,7 @@ class Price(Base):
     volume = Column(Float, nullable=False)
     source = Column(String(50), default="rabbitmq")
     processed_at = Column(DateTime(timezone=True), default=datetime.now)
+    event_time = Column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (
         UniqueConstraint("product", "timestamp", name="uq_price_product_timestamp"),
