@@ -8,6 +8,7 @@ dependencies = [
     "aioredis>=2.0.1",
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
+    "celery[redis]>=5.3.1",
     "fastapi>=0.136.3",
     "faststream[rabbit]>=0.7.1",
     "pandas>=3.0.3",

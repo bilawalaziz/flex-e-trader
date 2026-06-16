@@ -9,7 +9,6 @@ from app.api.price import router as price_router
 from app.api.schedule import router as schedule_router
 from app.api.tracker import router as ws_router
 from app.api.health import router as health_router
-from app.services.scheduler import run_optimisation
 from app.services.ws_manager import manager
 
 broker.include_router(comsuer_price_router)
@@ -17,14 +16,13 @@ broker.include_router(comsuer_price_router)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    optimisation_task = asyncio.create_task(run_optimisation())
+
     cache_listener = asyncio.create_task(manager.start_redis_listener())
     await broker.start()
     await declare_delay_queue(broker)
     yield
     await broker.stop()
     await cache_listener.cancel()
-    await optimisation_task.cancel()
 
 
 def create_app(lifespan=lifespan) -> FastAPI:
