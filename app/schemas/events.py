@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import Any
+from pydantic import BaseModel, Field, RootModel
+from typing import Any, List
 from datetime import datetime
 
 
@@ -19,3 +19,13 @@ class FailedEventCreate(BaseModel):
         default=None, description="message headers dict"
     )
     fail_reason: str | None = Field(default=None, description="failure reason")
+
+
+class PriceOutput(BaseModel):
+    timestamp: datetime
+    buy_price: float
+    sell_price: float
+
+
+class PriceOutputList(RootModel[List[PriceOutput]]):
+    pass

@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     main_queue: str = Field("price-queue", env="MAIN_QUEUE")
     delay_queue: str = Field("price-delay-queue", env="DELAY_QUEUE")
     queue_msg_ttl: int = Field(604800000, env="QUEUE_MSG_TTL")  # 7 days
+    upsert_batch_size: int = Field(100, env="UPSERT_BATCH_SIZE")
+    interval_mins: int = Field(1, env="INTERVAL_MINS")
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

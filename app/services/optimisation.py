@@ -13,7 +13,7 @@ Decision variables (for each time step t):
 Parameters:
   - price_buy[t], price_sell[t]  (EUR/MWh)
   - max_charge, max_discharge     (MW)
-  - charge_efficiency (η_ch), discharge_efficiency (η_dis)
+  - charge_efficiency (n_ch), discharge_efficiency (n_dis)
   - initial_soc (kWh)
   - time_step Δt (hours, e.g., 0.25)
 
@@ -21,7 +21,7 @@ Objective:
   Maximise Σ_t (discharge[t] * price_sell[t] - charge[t] * price_buy[t]) * Δt
 
 Subject to (for all t):
-  soc[t] = soc[t-1] + (charge[t] * η_ch - discharge[t] / η_dis) * Δt
+  soc[t] = soc[t-1] + (charge[t] * n_ch - discharge[t] / n_dis) * Δt
   SOC_min ≤ soc[t] ≤ SOC_max
   0 ≤ charge[t] ≤ max_charge
   0 ≤ discharge[t] ≤ max_discharge
@@ -37,16 +37,152 @@ The function will:
   3. Solve and return a schedule DataFrame with timestamp, power (negative for charge, positive for discharge), soc.
 """
 
+import numpy as np
+import pandas as pd
+from scipy.optimize import linprog
 
-def compute_battery_schedule(prices, battery_spec):
+
+def compute_battery_schedule(
+    prices: pd.DataFrame,
+    battery_spec: dict,
+    delta_t: float = 0.25,  # hours (15 minutes)
+) -> pd.DataFrame:
     """
+    Compute optimal charge/discharge schedule for a single battery.
+
     Args:
-        prices (pd.DataFrame): columns ['timestamp', 'buy_price', 'sell_price']
-        battery_spec (dict): {max_charge, max_discharge, soc_min, soc_max, charge_eff, discharge_eff, initial_soc}
+        prices: DataFrame with columns ['timestamp', 'buy_price', 'sell_price'].
+                Must be sorted by timestamp, one row per interval.
+        battery_spec: dict with keys:
+            max_charge_mw, max_discharge_mw,
+            capacity_kwh, charge_eff, discharge_eff,
+            min_soc (fraction 0..1), max_soc (fraction 0..1),
+            initial_soc_kwh (optional, default 0.5*capacity).
+        delta_t: length of each interval in hours (default 0.25 for 15 min).
+
     Returns:
-        pd.DataFrame with columns ['timestamp', 'power_mw', 'soc_kwh']
+        DataFrame with columns ['timestamp', 'power_mw', 'soc_kwh'].
+        power_mw positive = discharge (export), negative = charge (import).
     """
-    # this is just will do it later,
-    # for now just holding sample algo flow built with help of ai agent,
-    # after other basic thing
-    raise NotImplementedError("Optimisation engine not yet implemented.")
+    n = len(prices)
+    if n == 0:
+        return pd.DataFrame(columns=["timestamp", "power_mw", "soc_kwh"])
+
+    # Battery parameters
+    max_ch = battery_spec["max_charge_mw"]  # MW
+    max_dis = battery_spec["max_discharge_mw"]  # MW
+    cap_mwh = battery_spec["capacity_kwh"] / 1000.0  # MWh
+    eta_ch = battery_spec["charge_eff"]
+    eta_dis = battery_spec["discharge_eff"]
+    soc_min = battery_spec["min_soc"] * cap_mwh  # MWh
+    soc_max = battery_spec["max_soc"] * cap_mwh  # MWh
+    initial_soc_kwh = battery_spec.get(
+        "initial_soc_kwh", 0.5 * battery_spec["capacity_kwh"]
+    )
+    soc0 = initial_soc_kwh / 1000.0
+
+    buy = prices["buy_price"].values
+    sell = prices["sell_price"].values
+
+    # Decision vector: [charge[0..n-1], discharge[0..n-1], soc[1..n]]
+    c = np.zeros(3 * n)
+    c[n : 2 * n] = -sell * delta_t
+    c[0:n] = buy * delta_t  # charge cost, positive coefficient in min
+    # Profit = sum over t of (discharge[t] * sell[t] - charge[t] * buy[t]) * delta_t
+
+    # Constraints
+    A_ub = []
+    b_ub = []
+    A_eq = []
+    b_eq = []
+
+    # 1. charge[t] <= max_ch
+    for t in range(n):
+        row = np.zeros(3 * n)
+        row[t] = 1
+        A_ub.append(row)
+        b_ub.append(max_ch)
+
+    # 2. discharge[t] <= max_dis
+    for t in range(n):
+        row = np.zeros(3 * n)
+        row[n + t] = 1
+        A_ub.append(row)
+        b_ub.append(max_dis)
+
+    # 3. soc[t] >= soc_min  →  -soc[t] <= -soc_min
+    for t in range(n):
+        row = np.zeros(3 * n)
+        row[2 * n + t] = -1
+        A_ub.append(row)
+        b_ub.append(-soc_min)
+
+    # 4. soc[t] <= soc_max
+    for t in range(n):
+        row = np.zeros(3 * n)
+        row[2 * n + t] = 1
+        A_ub.append(row)
+        b_ub.append(soc_max)
+
+    # 5. Equality: soc[t] = soc[t-1] + (charge[t]*eta_ch - discharge[t]/eta_dis)*delta_t
+    # soc[0] is fixed initial, soc[1] is variable index 2n+0.
+    # t=0: soc[1] - soc0 - (charge[0]*eta_ch - discharge[0]/eta_dis)*delta_t = 0
+    for t in range(n):
+        row = np.zeros(3 * n)
+        if t == 0:
+            row[2 * n + t] = 1
+            row[t] = -eta_ch * delta_t  # charge[0]
+            row[n + t] = (1.0 / eta_dis) * delta_t  # discharge[0] (note sign)
+            b_eq.append(soc0)
+        else:
+            row[2 * n + t] = 1
+            row[2 * n + t - 1] = -1
+            row[t] = -eta_ch * delta_t
+            row[n + t] = (1.0 / eta_dis) * delta_t
+            b_eq.append(0)
+        A_eq.append(row)
+
+    # Bounds
+    bounds = [(0, None)] * (3 * n)  # all variables ≥ 0
+
+    # Solve
+    result = linprog(
+        c, A_ub=A_ub, b_ub=b_ub, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs"
+    )
+
+    if not result.success:
+        # Fallback: return all zeros
+        power = np.zeros(n)
+        soc = np.full(n, soc0)
+    else:
+        charge = result.x[0:n]
+        discharge = result.x[n : 2 * n]
+        soc = result.x[2 * n : 3 * n]
+
+        # Enforce mutual exclusivity: if both > 0, set the smaller to 0
+        for t in range(n):
+            if charge[t] > 1e-6 and discharge[t] > 1e-6:
+                if charge[t] < discharge[t]:
+                    charge[t] = 0
+                else:
+                    discharge[t] = 0
+
+        # Recalculate SOC from the corrected flows
+        soc_calc = np.zeros(n)
+        prev = soc0
+        for t in range(n):
+            flow = charge[t] * eta_ch - discharge[t] / eta_dis
+            soc_calc[t] = prev + flow * delta_t
+            prev = soc_calc[t]
+        # Clip to bounds
+        soc = np.clip(soc_calc, soc_min, soc_max)
+        power = discharge - charge  # positive = export
+
+    schedule = pd.DataFrame(
+        {
+            "timestamp": prices["timestamp"],
+            "power_mw": power,
+            "soc_kwh": soc,
+        }
+    )
+    return schedule

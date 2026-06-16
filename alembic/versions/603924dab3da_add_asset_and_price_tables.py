@@ -53,6 +53,12 @@ def upgrade() -> None:
     )
     op.create_index(op.f("ix_prices_product"), "prices", ["product"], unique=False)
     op.create_index(op.f("ix_prices_timestamp"), "prices", ["timestamp"], unique=False)
+    op.execute("""
+               INSERT INTO assets (name, type, max_charge_mw, max_discharge_mw, capacity_kwh, charge_efficiency, discharge_efficiency, min_soc, max_soc) 
+                VALUES ('Battery1', 'battery', 5, 5, 5000, 0.95, 0.95, 0.1, 0.9),
+                ('Battery2', 'battery', 5, 5, 5000, 0.95, 0.95, 0.1, 0.9),
+                ('Battery3', 'battery', 5, 5, 5000, 0.95, 0.95, 0.1, 0.9);
+               """)
     # ### end Alembic commands ###
 
 
