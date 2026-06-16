@@ -28,9 +28,6 @@ async def upsert(
     on_update = {col: getattr(stmt.excluded, col) for col in update_col_names}
     if hasattr(model, "processed_at"):
         on_update["processed_at"] = func.now()
-        print(
-            f"Condition active: {condition is not None} on_update['processed_at']={on_update['processed_at']}"
-        )
     if condition:
         where_clause = condition(stmt)
         stmt = stmt.on_conflict_do_update(
