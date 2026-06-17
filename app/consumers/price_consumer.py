@@ -156,17 +156,14 @@ async def handle_price(raw_msg: RabbitMessage):
     routing_key = _get_routing_key(raw_msg)
     body = raw_msg.body
 
-    # ── Parse JSON safely ──
     try:
         body_dict = json.loads(body) if isinstance(body, bytes) else body
     except (json.JSONDecodeError, TypeError):
         logger.error("queue- MALFORMED_JSON | body=%s", body)
-        # Use empty dict or raw body string for DLQ payload
         dlq_payload = {"malformed_raw": str(body)}
         await _publish_to_dlq(raw_msg, dlq_payload, retry_count, "malformed_json")
         return
 
-    # ── Validate Pydantic ──
     try:
         msg = PriceTick.model_validate(body_dict)
     except ValidationError as e:
@@ -174,7 +171,6 @@ async def handle_price(raw_msg: RabbitMessage):
         await _publish_to_dlq(raw_msg, body_dict, retry_count, "validation_error")
         return
 
-    # ── Business Logic ──
     logger.info(
         "queue- START | product=%s | attempt=%s/%s | rk=%s",
         msg.product,
