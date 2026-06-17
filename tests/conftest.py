@@ -85,3 +85,16 @@ def future_price_tick() -> PriceTick:
         event_time=now,
         message_id="msg-1",
     )
+
+
+@pytest.fixture
+def battery_spec() -> dict:
+    return {
+        "max_charge_mw": 5,
+        "max_discharge_mw": 5,
+        "capacity_kwh": 5000,
+        "charge_eff": 0.95,
+        "discharge_eff": 0.95,
+        "min_soc": 0.1,
+        "max_soc": 0.9,
+    }
