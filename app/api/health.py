@@ -36,7 +36,7 @@ async def readiness_check(response: Response, db: AsyncSession = Depends(get_ses
 
     # Redis check
     try:
-        redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
+        redis_client = redis.from_url(settings.redis_url, decode_responses=True)
         is_ok = await redis_client.ping()
         if is_ok:
             checks["redis"] = "ok"
