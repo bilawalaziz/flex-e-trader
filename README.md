@@ -96,17 +96,39 @@ Result: traders see actionable recommendations updated every minute, without tou
 - Celery Beat triggers optimisation every 60 seconds.
 - Celery Beat also publishes fresh test prices every 5 minutes → the demo never runs dry.
 
+### Prometheus metrics
+The service exports what can go quietly wrong, on `/metrics` for the API and on
+port 9100 for the celery worker:
+
+| Metric | Why it exists |
+|---|---|
+| `flexetrader_lp_repaired_intervals_total` | The LP is solved without the charge/discharge exclusivity constraint and repaired afterwards. Above zero, the published schedule is no longer provably optimal — and nothing about the schedule itself says so. |
+| `flexetrader_lp_repair_cost_eur_total` | LP objective minus the repaired schedule's profit: what the linear relaxation costs, in euros. |
+| `flexetrader_optimisation_cycles_total{outcome}` | `no_prices` means the producer stopped, which otherwise looks identical to a working system with an old schedule. |
+| `flexetrader_price_messages_total{outcome}` | A broken producer leaks into the DLQ one message at a time; the rate shows it on the first one. |
+| `flexetrader_schedule_profit_eur{asset}` | Expected profit of the schedule actually published. |
+
+The worker needs its own exporter because celery runs tasks in forked children:
+a counter incremented while optimising lives in a process with no HTTP server in
+it. `PROMETHEUS_MULTIPROC_DIR` makes those children write to shared mmap files
+that the parent sums on scrape — without it the worker's metrics read as
+permanently idle, which is worse than having none.
+
 ### Grafana live dashboard
 - Multi‑asset dropdown (select any battery).
 - Time‑series charts for power schedule and state of charge.
 - Stat panels for latest market price and current battery SoC.
 - Auto‑refresh every 5 seconds.
+- A second dashboard, **FlexiTrader Operations**, reads Prometheus rather than
+  Postgres: repair rate, profit given up to the repair, cycle outcomes and
+  duration, message outcomes, websocket clients.
 
 ### DevOps & testing
 - Multi‑stage Docker image (dependency caching).
 - Alembic migrations run automatically on container start.
 - pytest test suite (unit + integration) with dedicated test database.
-- CI pipeline (GitHub Actions) runs tests, builds Docker image.
+- CI pipeline (GitHub Actions) runs ruff, the test suite against real
+  Postgres/RabbitMQ/Redis services, and builds the Docker image.
 
 ---
 
@@ -157,8 +179,6 @@ VALUES ('Battery1', 'battery', 5, 5, 5000, 0.95, 0.95, 0.1, 0.9);
   both flows came back non‑zero, by zeroing the smaller and recomputing the SOC
   trajectory. That keeps the schedule physically feasible but not provably
   optimal.
-- **Prometheus metrics.** Grafana reads Postgres directly today; the service
-  itself is not instrumented.
 - **A hosted deployment.** The Terraform and Helm setup targets a local kind
   cluster through kubeconfig; nothing runs in a cloud environment yet.
 - **User authentication** for trader APIs.
@@ -177,12 +197,14 @@ app/
 ├── models/            # SQLAlchemy models (Asset, Price, Schedule)
 ├── repositories/      # Database access (upsert logic)
 ├── schemas/           # Pydantic DTOs
+├── core/              # Config, database, metrics
 ├── services/          # Business logic (optimisation, scheduler)
 ├── celery_app.py      # Celery configuration & beat schedule
 ├── tasks.py           # Celery tasks (optimisation, publishing)
 tests/                 # pytest suite
 scripts/               # Price tick producer (CLI)
-grafana/               # Dashboard & datasource provisioning
+grafana/               # Dashboards & datasource provisioning
+prometheus/            # Scrape configuration
 infra/                 # Terraform + Helm charts, kind cluster config
 .github/workflows/     # CI: migrations, tests, Docker build
 ```
