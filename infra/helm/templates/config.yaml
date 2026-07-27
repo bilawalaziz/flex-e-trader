@@ -1,0 +1,376 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: flexetrader
+---
+# PostgreSQL
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: flexetrader
+type: Opaque
+stringData:
+  POSTGRES_USER: {{ .Values.postgres.user }}
+  POSTGRES_PASSWORD: {{ .Values.postgres.password }}
+  POSTGRES_DB: {{ .Values.postgres.db }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: flexetrader
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: microk8s-hostpath
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: flexetrader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: flexetrader
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5432
+  selector:
+    app: postgres
+---
+# RabbitMQ
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbitmq-secret
+  namespace: flexetrader
+type: Opaque
+stringData:
+  RABBITMQ_DEFAULT_USER: {{ .Values.rabbitmq.user }}
+  RABBITMQ_DEFAULT_PASS: {{ .Values.rabbitmq.password }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  namespace: flexetrader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.13-management-alpine
+          ports:
+            - containerPort: 5672
+            - containerPort: 15672
+          envFrom:
+            - secretRef:
+                name: rabbitmq-secret
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: flexetrader
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5672
+      name: amqp
+  selector:
+    app: rabbitmq
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-management
+  namespace: flexetrader
+spec:
+  type: NodePort
+  ports:
+    - port: 15672
+      nodePort: {{ .Values.nodePorts.rabbitmq }}
+      name: management
+  selector:
+    app: rabbitmq
+---
+# Redis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: flexetrader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 25m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: flexetrader
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+  selector:
+    app: redis
+---
+# App ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-env
+  namespace: flexetrader
+data:
+  APP_ENV: production
+  LOG_LEVEL: info
+---
+# App Secret (auto-generated connection strings)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: flexetrader
+type: Opaque
+stringData:
+  DATABASE_URL: "postgresql://{{ .Values.postgres.user }}:{{ .Values.postgres.password }}@postgres:5432/{{ .Values.postgres.db }}"
+  REDIS_URL: "redis://redis:6379/0"
+  CELERY_BROKER_URL: "amqp://{{ .Values.rabbitmq.user }}:{{ .Values.rabbitmq.password }}@rabbitmq:5672//"
+  CELERY_RESULT_BACKEND: "redis://redis:6379/0"
+---
+# App
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: flexetrader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: app-env
+            - secretRef:
+                name: app-secrets
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: flexetrader
+spec:
+  type: NodePort
+  ports:
+    - port: 8000
+      nodePort: {{ .Values.nodePorts.app }}
+  selector:
+    app: app
+---
+# Celery Worker
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: flexetrader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: celery-worker
+  template:
+    metadata:
+      labels:
+        app: celery-worker
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery", "-A", "app.celery_app", "worker", "--loglevel=info", "--concurrency=1"]
+          envFrom:
+            - configMapRef:
+                name: app-env
+            - secretRef:
+                name: app-secrets
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+---
+# Celery Beat
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-beat
+  namespace: flexetrader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: celery-beat
+  template:
+    metadata:
+      labels:
+        app: celery-beat
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: beat
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery", "-A", "app.celery_app", "beat", "--loglevel=info"]
+          envFrom:
+            - configMapRef:
+                name: app-env
+            - secretRef:
+                name: app-secrets
+          resources:
+            requests:
+              memory: 64Mi
+              cpu: 25m
+---
+# Grafana
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: flexetrader
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: microk8s-hostpath
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: flexetrader
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+        - name: grafana
+          image: grafana/grafana-oss:10.4.0
+          ports:
+            - containerPort: 3000
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              value: {{ .Values.grafana.adminUser | quote }}
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              value: {{ .Values.grafana.adminPassword | quote }}
+          volumeMounts:
+            - name: storage
+              mountPath: /var/lib/grafana
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: 50m
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: flexetrader
+spec:
+  type: NodePort
+  ports:
+    - port: 3000
+      nodePort: {{ .Values.nodePorts.grafana }}
+  selector:
+    app: grafana
