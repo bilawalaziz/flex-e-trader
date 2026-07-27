@@ -15,7 +15,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install ruff
-        run: pip install ruff
+        # Pinned to the version in uv.lock. An unpinned "pip install ruff"
+        # picks up whatever released today, and a new default rule turns into
+        # a red build on a commit that changed nothing.
+        run: pip install ruff==0.15.16
       - name: Lint
         run: ruff check .
       - name: Format check
