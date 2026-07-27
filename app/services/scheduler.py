@@ -1,11 +1,18 @@
 import asyncio
 import logging
 import json
+import time
 from datetime import datetime, timezone
 
 import pandas as pd
 from redis.asyncio import Redis
 from app.core.config import settings
+from app.core.metrics import (
+    optimisation_cycles_total,
+    optimisation_duration_seconds,
+    record_optimisation_result,
+    schedule_slots_written_total,
+)
 from app.core.database import async_session
 from app.repositories.price_repo import get_latest_prices
 from app.repositories.asset_repo import get_battery_assets
@@ -20,8 +27,9 @@ async def run_optimisation():
     redis = Redis.from_url(settings.redis_url)
     interval_mins: int = max(int(settings.interval_mins), 1)
     while True:
+        cycle_start = time.perf_counter()
         try:
-            logger.info("Running battery optimisation...")
+            logger.info("optimisation cycle starting | interval=%s min", interval_mins)
 
             # fetch battery price data
             async with async_session() as session:
@@ -33,7 +41,12 @@ async def run_optimisation():
             )
 
             if prices_df.empty:
-                logger.warning("No prices available. Skipping cycle.")
+                logger.warning(
+                    "no prices available, skipping cycle | sleeping=%s min",
+                    interval_mins,
+                )
+                optimisation_cycles_total.labels(outcome="no_prices").inc()
+                optimisation_duration_seconds.observe(time.perf_counter() - cycle_start)
                 await sleep_for_minutes(interval_mins)
                 continue
             else:
@@ -50,6 +63,21 @@ async def run_optimisation():
                     "max_soc": bat.max_soc,
                 }
                 schedule = compute_battery_schedule(prices_df, spec)
+                diagnostics = schedule.attrs.get("diagnostics", {})
+                record_optimisation_result(bat.name, diagnostics)
+                if diagnostics.get("repaired_intervals"):
+                    # Worth a log line as well as a metric: this is the one
+                    # condition under which the published schedule is not the
+                    # optimum the LP reported.
+                    logger.warning(
+                        "exclusivity repair applied | asset=%s | intervals=%s/%s "
+                        "| profit_given_up=%.2f EUR",
+                        bat.name,
+                        diagnostics["repaired_intervals"],
+                        diagnostics.get("intervals", 0),
+                        diagnostics.get("lp_profit_eur", 0.0)
+                        - diagnostics.get("realised_profit_eur", 0.0),
+                    )
 
                 # store power schedules for battries
                 slots = []
@@ -73,7 +101,10 @@ async def run_optimisation():
                     await batch_upsert_schedule_slots(session, slots)
                     await session.commit()
 
-                logger.info(f"Saved schedule for {bat.name}: {len(schedule)} slots.")
+                schedule_slots_written_total.labels(asset=bat.name).inc(len(slots))
+                logger.info(
+                    "schedule saved | asset=%s | slots=%s", bat.name, len(slots)
+                )
 
                 # publish notification for clients
                 await redis.publish(
@@ -87,9 +118,14 @@ async def run_optimisation():
                     ),
                 )
 
-        except Exception:
-            logger.exception("Optimisation cycle failed.")
+            optimisation_cycles_total.labels(outcome="success").inc()
 
+        except Exception:
+            logger.exception("optimisation cycle failed")
+            optimisation_cycles_total.labels(outcome="failed").inc()
+
+        optimisation_duration_seconds.observe(time.perf_counter() - cycle_start)
+        logger.debug("cycle complete | sleeping=%s min", interval_mins)
         await sleep_for_minutes(interval_mins)
 
 
