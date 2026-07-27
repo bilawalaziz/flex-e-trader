@@ -1,0 +1,26 @@
+image:
+  repository: flexetrader-app
+  tag: latest
+  pullPolicy: IfNotPresent
+
+nodePorts:
+  app: 30800
+  rabbitmq: 31672
+  grafana: 30300
+
+postgres:
+  user: flexetrader
+  password: flexetrader
+  db: flexetrader
+  # kind uses 'standard' storage class by default
+  storageClass: standard
+
+rabbitmq:
+  user: guest
+  password: guest
+
+grafana:
+  adminUser: admin
+  adminPassword: admin
+  # kind uses 'standard' storage class by default
+  storageClass: standard
