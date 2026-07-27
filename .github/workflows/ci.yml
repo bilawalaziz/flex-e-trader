@@ -1,0 +1,84 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        # Pinned to the version in uv.lock. An unpinned "pip install ruff"
+        # picks up whatever released today, and a new default rule turns into
+        # a red build on a commit that changed nothing.
+        run: pip install ruff==0.15.16
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: flexetrader
+          POSTGRES_PASSWORD: secret
+          POSTGRES_DB: flexetrader
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      rabbitmq:
+        image: rabbitmq:3.13-management-alpine
+        ports:
+          - 5672:5672
+        env:
+          RABBITMQ_DEFAULT_USER: guest
+          RABBITMQ_DEFAULT_PASS: guest
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-mock httpx
+      - name: Wait for PostgreSQL
+        run: until pg_isready -h localhost -p 5432 -U flexetrader; do sleep 2; done
+      - name: Run migrations
+        run: alembic upgrade head
+        env:
+          DATABASE_URL: postgresql+asyncpg://flexetrader:secret@localhost:5432/flexetrader
+      - name: Run tests
+        run: pytest -v
+        env:
+          DATABASE_URL: postgresql+asyncpg://flexetrader:secret@localhost:5432/flexetrader
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672/
+          REDIS_URL: redis://localhost:6379/0
+
+  build:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t flexetrader:latest .

@@ -29,7 +29,6 @@ services:
       context: .
       target: runtime 
     entrypoint: ["/app/entrypoint.sh"]
-    command: ["--reload"]
     ports:
       - "8000:8000"
     env_file:
@@ -40,6 +39,66 @@ services:
       - redis
     volumes:
       - ./app:/app/app 
+  
+  celery-worker:
+    build:
+      context: .
+      target: runtime
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=1
+    env_file: .env
+    environment:
+      # Tasks run in forked children; without a shared directory their
+      # counters never reach the exporter in the parent.
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus-multiproc
+    ports:
+      - "9100:9100"
+    depends_on:
+      - postgres
+      - rabbitmq
+      - redis
+    volumes:
+      - ./app:/app/app
+
+  celery-beat:
+    build:
+      context: .
+      target: runtime
+    command: celery -A app.celery_app beat --loglevel=info
+    env_file: .env
+    depends_on:
+      - postgres
+      - rabbitmq
+      - redis
+    volumes:
+      - ./app:/app/app
+  
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    depends_on:
+      - app
+      - celery-worker
+
+  grafana:
+    image: grafana/grafana-oss:10.4.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - postgres
+      - prometheus
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
 
 volumes:
-  pgdata: 
+  pgdata:
+  grafana-storage:
+  prometheus-data: 

@@ -8,9 +8,11 @@ dependencies = [
     "aioredis>=2.0.1",
     "alembic>=1.18.4",
     "asyncpg>=0.31.0",
+    "celery[redis]>=5.3.1",
     "fastapi>=0.136.3",
     "faststream[rabbit]>=0.7.1",
     "pandas>=3.0.3",
+    "prometheus-client>=0.21.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
     "redis>=8.0.0",
@@ -21,6 +23,16 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+    "pytest-mock>=3.15.1",
     "ruff>=0.15.16",
 ]
+
+[tool.ruff]
+# Auto-generated migrations are not hand-maintained code.
+extend-exclude = ["alembic/versions"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
