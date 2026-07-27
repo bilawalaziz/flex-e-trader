@@ -1,0 +1,84 @@
+{
+  "title": "FlexiTrader Live",
+  "refresh": "5s",
+  "templating": {
+    "list": [
+      {
+        "name": "asset",
+        "label": "Asset",
+        "type": "query",
+        "datasource": "FlexiTrader DB",
+        "query": "SELECT id AS __value, name AS __text FROM assets WHERE type = 'battery' ORDER BY id;",
+        "refresh": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "Battery1",
+          "value": "1"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Power Schedule (MW)",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "FlexeTrader DB",
+          "format": "time_series",
+          "rawSql": "SELECT start_time AS time, power_mw FROM schedules WHERE asset_id = $asset ORDER BY start_time"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "State of Charge (kWh)",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "FlexeTrader DB",
+          "rawSql": "SELECT start_time AS time, state_of_charge_kwh FROM schedules WHERE asset_id = $asset ORDER BY start_time",
+          "format": "time_series"
+        }
+      ],
+      "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Latest Price (€/MWh)",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "FlexeTrader DB",
+          "rawSql": "SELECT sell_price FROM prices ORDER BY event_time DESC LIMIT 1",
+          "format": "table"
+        }
+      ],
+      "gridPos": {"x": 0, "y": 8, "w": 6, "h": 4}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Battery SoC Now (kWh)",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": "FlexeTrader DB",
+          "rawSql": "SELECT state_of_charge_kwh FROM schedules WHERE asset_id = $asset ORDER BY start_time DESC LIMIT 1",
+          "format": "table"
+        }
+      ],
+      "gridPos": {"x": 6, "y": 8, "w": 6, "h": 4}
+    }
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  }
+}
