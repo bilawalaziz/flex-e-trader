@@ -1,0 +1,23 @@
+global:
+  # The optimisation loop runs on an interval measured in minutes, so a
+  # faster scrape would mostly resample unchanged values.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: flexetrader-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["app:8000"]
+        labels:
+          component: api
+
+  # The worker is a separate scrape target, not a separate path on the API.
+  # Optimisation runs in a celery child process, and its counters only reach
+  # the exporter through the shared multiprocess directory inside this
+  # container.
+  - job_name: flexetrader-worker
+    static_configs:
+      - targets: ["celery-worker:9100"]
+        labels:
+          component: worker

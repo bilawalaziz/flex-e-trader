@@ -12,3 +12,12 @@ datasources:
       sslmode: disable
       postgresVersion: 1500
       timescaledb: false
+
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
