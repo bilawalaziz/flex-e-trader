@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>FlexiTrader Live Monitor</title>
+    <style>
+        body { margin: 0; font-family: Arial, sans-serif; display: flex; height: 100vh; }
+        #grafana { flex: 3; border: none; }
+        #sidebar { flex: 1; background: #1e1e2f; color: #c0c0e0; padding: 16px; overflow-y: auto; }
+        #sidebar h2 { margin-top: 0; }
+        .event { border-bottom: 1px solid #333; padding: 8px 0; font-size: 14px; }
+        .event .time { color: #888; }
+    </style>
+</head>
+<body>
+    <iframe id="grafana" src="http://localhost:3000/d/flexetrader?orgId=1&refresh=5s&kiosk=full"></iframe>
+    <div id="sidebar">
+        <h2>Live Updates</h2>
+        <div id="events">Waiting for schedule updates...</div>
+    </div>
+    <script>
+        const ws = new WebSocket("ws://localhost:8000/ws/live");
+        const eventsDiv = document.getElementById("events");
+
+        function addEvent(data) {
+            const now = new Date().toLocaleTimeString();
+            const p = document.createElement("div");
+            p.className = "event";
+            p.innerHTML = `<span class="time">${now}</span> ${data.asset_name || 'Asset'} – updated`;
+            eventsDiv.prepend(p);
+            // Keep only the last 20 messages
+            while (eventsDiv.children.length > 20) eventsDiv.lastChild.remove();
+        }
+
+        ws.onopen = () => {
+            addEvent({asset_name: "System", message: "WebSocket connected"});
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            addEvent(data);
+        };
+
+        ws.onerror = (err) => {
+            addEvent({asset_name: "Error", message: "Connection failed"});
+        };
+    </script>
+</body>
+</html>
