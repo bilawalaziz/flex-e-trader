@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     upsert_batch_size: int = Field(100, alias="UPSERT_BATCH_SIZE")
     interval_mins: int = Field(1, alias="INTERVAL_MINS")
 
+    # Observability
+    metrics_enabled: bool = Field(True, alias="METRICS_ENABLED")
+    # The API exposes /metrics on its own port; the celery worker has no
+    # HTTP server of its own, so it gets one here.
+    metrics_port: int = Field(9100, alias="METRICS_PORT")
+
     model_config = ConfigDict(
         env_file=os.getenv("ENV_FILE", ".env"),
         env_file_encoding="utf-8",
