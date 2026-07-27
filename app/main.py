@@ -1,7 +1,9 @@
 import asyncio
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from app.consumers.broker import broker
+from app.core.metrics import build_registry
 from app.core.config import settings
 from app.consumers.price_consumer import router as comsuer_price_router
 from app.consumers.broker_queue import declare_delay_queue
@@ -39,6 +41,17 @@ def create_app(lifespan=lifespan) -> FastAPI:
     app.include_router(schedule_router)
     app.include_router(ws_router)
     app.include_router(health_router)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        # A route rather than a mounted ASGI app: mounting "/metrics" makes
+        # Starlette redirect to "/metrics/", which costs every scrape an
+        # extra round trip. The registry is rebuilt per request because in
+        # multiprocess mode it has to re-read the other processes' files.
+        return Response(
+            generate_latest(build_registry()), media_type=CONTENT_TYPE_LATEST
+        )
+
     return app
 
 
