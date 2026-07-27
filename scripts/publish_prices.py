@@ -16,7 +16,6 @@ Usage:
 import argparse
 import asyncio
 import random
-import sys
 from datetime import datetime, timedelta, timezone
 
 from faststream.rabbit import RabbitBroker
