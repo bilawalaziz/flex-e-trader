@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from typing import Any
 
 from faststream import AckPolicy
@@ -17,6 +18,11 @@ from app.schemas import FailedEventCreate, PriceTick
 from app.core.database import async_session
 from app.core.config import settings
 from app.consumers.broker import broker
+from app.core.metrics import (
+    dead_letter_events_total,
+    price_message_duration_seconds,
+    price_messages_total,
+)
 from app.repositories.price_repo import upsert_price
 
 logger = logging.getLogger(__name__)
@@ -84,6 +90,7 @@ async def _publish_to_delay(
         retry_count,
         MAX_RETRIES + 1,
     )
+    price_messages_total.labels(outcome="retry_queued").inc()
     await raw_msg.ack()
 
 
@@ -104,6 +111,7 @@ async def _publish_to_dlq(
         retry_count + 1,
         reason,
     )
+    price_messages_total.labels(outcome="dead_lettered").inc()
     await raw_msg.ack()
 
 
@@ -137,6 +145,7 @@ async def handle_dlq(raw_msg: RabbitMessage):
         )
         await session.commit()
 
+    dead_letter_events_total.labels(reason=fail_reason).inc()
     await raw_msg.ack()
     logger.error(
         "DLQ_RECEIVED | reason=%s | retries=%s | body=%s",
@@ -152,6 +161,7 @@ async def handle_dlq(raw_msg: RabbitMessage):
     ack_policy=AckPolicy.MANUAL,
 )
 async def handle_price(raw_msg: RabbitMessage):
+    started = time.perf_counter()
     retry_count = int(raw_msg.headers.get(RETRY_HEADER, 0))
     routing_key = _get_routing_key(raw_msg)
     body = raw_msg.body
@@ -160,15 +170,19 @@ async def handle_price(raw_msg: RabbitMessage):
         body_dict = json.loads(body) if isinstance(body, bytes) else body
     except (json.JSONDecodeError, TypeError):
         logger.error("queue- MALFORMED_JSON | body=%s", body)
+        price_messages_total.labels(outcome="malformed_json").inc()
         dlq_payload = {"malformed_raw": str(body)}
         await _publish_to_dlq(raw_msg, dlq_payload, retry_count, "malformed_json")
+        price_message_duration_seconds.observe(time.perf_counter() - started)
         return
 
     try:
         msg = PriceTick.model_validate(body_dict)
     except ValidationError as e:
         logger.warning("queue- VALIDATION_FAIL | errors=%s | body=%s", e, body_dict)
+        price_messages_total.labels(outcome="validation_error").inc()
         await _publish_to_dlq(raw_msg, body_dict, retry_count, "validation_error")
+        price_message_duration_seconds.observe(time.perf_counter() - started)
         return
 
     logger.info(
@@ -186,10 +200,12 @@ async def handle_price(raw_msg: RabbitMessage):
 
         if inserted:
             logger.info("queue- INSERT_OK | product=%s", msg.product)
+            price_messages_total.labels(outcome="inserted").inc()
         else:
             logger.warning(
                 "queue- DEDUP_SKIP | product=%s | already exists", msg.product
             )
+            price_messages_total.labels(outcome="deduplicated").inc()
 
         await raw_msg.ack()
 
@@ -206,3 +222,5 @@ async def handle_price(raw_msg: RabbitMessage):
             await _publish_to_dlq(
                 raw_msg, body_dict, retry_count + 1, "max_retries_exceeded"
             )
+    finally:
+        price_message_duration_seconds.observe(time.perf_counter() - started)
