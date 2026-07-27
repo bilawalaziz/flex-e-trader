@@ -18,3 +18,5 @@ wheels/
 
 docker-compose*.yml
 docker-compose*.yaml
+play_area/
+charts/
