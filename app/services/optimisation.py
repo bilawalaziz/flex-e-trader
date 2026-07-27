@@ -66,7 +66,9 @@ def compute_battery_schedule(
     """
     n = len(prices)
     if n == 0:
-        return pd.DataFrame(columns=["timestamp", "power_mw", "soc_kwh"])
+        empty = pd.DataFrame(columns=["timestamp", "power_mw", "soc_kwh"])
+        empty.attrs["diagnostics"] = _diagnostics("no_prices", 0, 0, 0.0, 0.0)
+        return empty
 
     # Battery parameters
     max_ch = battery_spec["max_charge_mw"]  # MW
@@ -154,18 +156,34 @@ def compute_battery_schedule(
         # Fallback: return all zeros
         power = np.zeros(n)
         soc = np.full(n, soc0)
+        diagnostics = _diagnostics(_solver_status(result), n, 0, 0.0, 0.0)
     else:
         charge = result.x[0:n]
         discharge = result.x[n : 2 * n]
         soc = result.x[2 * n : 3 * n]
 
-        # Enforce mutual exclusivity: if both > 0, set the smaller to 0
+        # Profit the LP believes it achieved, before the repair below. The
+        # objective is stated as a minimisation of negative profit.
+        lp_profit = -float(result.fun)
+
+        # Enforce mutual exclusivity: if both > 0, set the smaller to 0.
+        # The LP is solved without this constraint because it is not linear;
+        # repairing after the fact keeps the solve fast but means the result
+        # is no longer provably optimal whenever this loop fires. Count it, so
+        # "how often is that" has an answer instead of an opinion.
+        repaired = 0
         for t in range(n):
             if charge[t] > 1e-6 and discharge[t] > 1e-6:
+                repaired += 1
                 if charge[t] < discharge[t]:
                     charge[t] = 0
                 else:
                     discharge[t] = 0
+
+        realised_profit = float(np.sum((discharge * sell - charge * buy) * delta_t))
+        diagnostics = _diagnostics(
+            _solver_status(result), n, repaired, lp_profit, realised_profit
+        )
 
         # Recalculate SOC from the corrected flows
         soc_calc = np.zeros(n)
@@ -185,4 +203,42 @@ def compute_battery_schedule(
             "soc_kwh": soc,
         }
     )
+    schedule.attrs["diagnostics"] = diagnostics
     return schedule
+
+
+# scipy reports the outcome as an integer; the string is what a metric label
+# and a log line both want.
+_SOLVER_STATUS = {
+    0: "optimal",
+    1: "iteration_limit",
+    2: "infeasible",
+    3: "unbounded",
+    4: "numerical_failure",
+}
+
+
+def _solver_status(result) -> str:
+    return _SOLVER_STATUS.get(getattr(result, "status", -1), "unknown")
+
+
+def _diagnostics(
+    solver_status: str,
+    intervals: int,
+    repaired_intervals: int,
+    lp_profit_eur: float,
+    realised_profit_eur: float,
+) -> dict:
+    """What the caller needs to know about a solve it did not watch.
+
+    Returned on the DataFrame rather than emitted here so this module stays a
+    pure function of prices and battery spec, with no metrics or logging
+    dependency of its own.
+    """
+    return {
+        "solver_status": solver_status,
+        "intervals": intervals,
+        "repaired_intervals": repaired_intervals,
+        "lp_profit_eur": lp_profit_eur,
+        "realised_profit_eur": realised_profit_eur,
+    }
