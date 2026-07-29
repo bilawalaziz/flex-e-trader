@@ -9,8 +9,10 @@ wheels/
 # Virtual environments
 .venv
 
+# Scratch notes (error.md, PROJECT_STATUS.md, …) stay out; real docs opt back in.
 *.md
 !README.md
+!CLAUDE.md
 
 *.env
 .env
